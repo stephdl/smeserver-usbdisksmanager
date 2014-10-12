@@ -1,0 +1,27 @@
+{
+
+  use esmith::config; 
+
+  use esmith::util; 
+
+  use esmith::db; 
+
+
+
+  my %conf; 
+#  my %usbdisks
+
+tie %conf, 'esmith::config', '/home/e-smith/db/configuration';
+#tie %usbdisks, 'esmith::config', '/home/e-smith/db/confusbdisks';
+
+$OUT .= "# Usbdisks manager\n";
+
+if ( db_get_prop(\%conf,"usbdisks","status") eq "enabled")
+ {
+  my $minutes = db_get_prop(\%conf,"usbdisks","frequence")||"2";
+
+    $OUT .= "*/$minutes * * * * root /usr/sbin/./usbdisks.sh &> /dev/null\n"; 
+
+ }
+} 
+

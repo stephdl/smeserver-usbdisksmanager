@@ -1,0 +1,984 @@
+#!/usr/bin/perl -wTU
+#----------------------------------------------------------------------
+# heading     : Miscellaneous
+# description : USB Disks
+# navigation  : 5000 5200
+#----------------------------------------------------------------------
+# JP Pialasse January 2007
+#----------------------------------------------------------------------
+
+#package usbdisks;
+
+use diagnostics;
+use strict;
+use CGI ':all';
+use CGI::Carp qw(fatalsToBrowser);
+use esmith::db;
+use esmith::templates;
+use esmith::FormMagick;
+
+my $fm = esmith::FormMagick->new();
+$fm->parse_xml();
+
+#use Sys::Filesystem ();
+#use FileHandle;
+# use Shell qw (ls cat);
+#use File::Temp  0.12 qw(tempdir);
+#use File::Basename;
+
+use esmith::cgi;
+use esmith::config;
+use esmith::util;
+use esmith::DB;
+use esmith::DB::db;
+
+
+
+sub showInitial ($$);
+sub modifyConfig ($$);
+sub GeneralMenu ($);
+sub aide($);
+
+
+
+BEGIN
+{
+    # Clear PATH and related environment variables so that calls to
+    # external programs do not cause results to be tainted. See
+    # "perlsec" manual page for details.
+
+    $ENV {'PATH'} = '/bin:/usr/bin:/sbin/';
+    $ENV {'SHELL'} = '/bin/bash';
+    delete $ENV {'ENV'};
+}
+
+esmith::util::setRealToEffective ();
+
+$CGI::POST_MAX=1024 * 100;  # max 100K posts
+$CGI::DISABLE_UPLOADS = 1;  # no uploads
+
+my %conf;
+tie %conf, 'esmith::config';
+#db_set(\%conf, "usbdisks", "service|frequence|3");
+
+my %usbdisks;
+if (-e   "/home/e-smith/db/confusbdisks" )
+   {
+   tie %usbdisks, 'esmith::config', '/home/e-smith/db/confusbdisks';
+   }
+else
+   {
+   `echo "">/home/e-smith/db/confusbdisks`;
+   tie %usbdisks, 'esmith::config', '/home/e-smith/db/confusbdisks';
+   }
+
+
+my $usbd_frequence = db_get_prop(\%conf, "usbdisks","frequence") || "2";
+my $usbd_status = db_get_prop(\%conf, "usbdisks","status") || "disabled";
+my $usbd_status_mediaG = db_get_prop(\%conf, "usbdisks","status_mediaG") || "disabled";
+my $usbd_status_mediaU = db_get_prop(\%conf, "usbdisks","status_mediaU") || "disabled";
+
+#------------------------------------------------------------
+# traduction
+#------------------------------------------------------------
+my $sec = 5;
+
+my $tr_menu_config = $fm->localise('tr_menu_config');
+my $tr_menu_accueil = $fm->localise('tr_menu_accueil');
+my $tr_disks_online = $fm->localise('tr_disks_online');
+my $tr_known_mounts = $fm->localise('tr_known_mounts');
+my $tr_description = $fm->localise('tr_description');
+my $tr_aide = $fm->localise('tr_aide');
+my $tr_no = $fm->localise('tr_no');
+my $tr_yes = $fm->localise('tr_yes');
+
+my $tr_dev = $fm->localise('tr_dev');
+my $tr_uuid = $fm->localise('tr_uuid');
+my $tr_mount = $fm->localise('tr_mount');
+my $tr_fstab = $fm->localise('tr_fstab');
+my $tr_label = $fm->localise('tr_label');
+my $tr_fs_type = $fm->localise('tr_fs_type');
+my $tr_device_type = $fm->localise('tr_device_type');
+my $tr_action = $fm->localise('tr_action');
+my $tr_mount_to = $fm->localise('tr_mount_to');
+my $tr_mounted_to = $fm->localise('tr_mounted_to');
+my $tr_connected = $fm->localise('tr_connected');
+my $tr_status = $fm->localise('tr_status');
+my $tr_success = $fm->localise('tr_success');
+my $tr_failure = $fm->localise('tr_failure');
+my $tr_unknown = $fm->localise('tr_unknown');
+my $tr_add = $fm->localise('tr_add');
+my $tr_modify = $fm->localise('tr_modify');
+my $tr_remove = $fm->localise('tr_remove');
+my $tr_refresh = $fm->localise('tr_refresh');
+my $tr_removed = $fm->localise('tr_removed');
+my $tr_added = $fm->localise('tr_added');
+my $tr_save_label = $fm->localise('tr_save_label');
+my $tr_save_button = $fm->localise('tr_save_button');
+my $tr_rapport = $fm->localise('tr_rapport');
+my $tr_with = $fm->localise('tr_with');
+my $tr_removed = $fm->localise('tr_removed');
+my $tr_disabled = $fm->localise('tr_disabled');
+my $tr_enabled = $fm->localise('tr_enabled');
+
+my $tr_pageaide = $fm->localise('tr_pageaide');
+my $tr_titre_ajout = $fm->localise('tr_title_ajout');
+my $tr_titre_modifier= $fm->localise('tr_titre_modifier');
+my $tr_titre_accueil = $fm->localise('tr_titre_accueil');
+
+my $tr_titre_config = $fm->localise('tr_titre_config');
+my $tr_frequence = $fm->localise('tr_frequence');
+my $tr_incorect = $fm->localise('tr_incorect');
+my $tr_forbidden_directory = $fm->localise('tr_forbidden_directory');
+my $tr_directory_does_not_exist= $fm->localise('tr_directory_does_not_exist');
+my $tr_uuidgenerate= $fm->localise('tr_uuidgenerate');
+
+#ajout verion 0.2-0.1
+my $tr_options_mount_to = $fm->localise('tr_options_mount_to');
+my $tr_status_media = $fm->localise('tr_status_media');
+my $tr_status_mediaG = $fm->localise('tr_status_mediaG');
+my $tr_status_mediaU = $fm->localise('tr_status_mediaU');
+my $tr_status_mountmedia = $fm->localise('tr_status_mountmedia');
+my $tr_status_mountto = $fm->localise('tr_status_mountto');
+
+#------------------------------------------------------------
+# examine state parameter and display the appropriate form
+#------------------------------------------------------------
+
+my $q = new CGI;
+
+if (! grep (/^state$/, $q->param))
+{
+    showInitial ($q,'');
+}
+elsif ($q->param ('state') eq "USBModifyConfig")
+{
+    USBModifyConfig ($q);
+}
+elsif ($q->param ('state') eq "validUSBModifyConfig")
+{
+    validUSBModifyConfig ($q);
+}
+elsif ($q->param ('state') eq "USBAddDisk")
+{
+    USBAddDisk ($q);
+}
+elsif ($q->param ('state') eq "validUSBAddDisk")
+{
+    validUSBAddDisk ($q);
+}
+elsif ($q->param ('state') eq "USBModifyDisk")
+{
+    USBModifyDisk ($q);
+}
+elsif ($q->param ('state') eq "validUSBModifyDisk")
+{
+    validUSBModifyDisk ($q);
+}
+elsif ($q->param ('state') eq "USBMountDisk")
+{
+    USBMountDisk ($q);
+}
+elsif ($q->param ('state') eq "USBUnMountDisk")
+{
+    USBUnMountDisk ($q);
+}
+elsif ($q->param ('state') eq "USBMounttoDisk")
+{
+    USBMounttoDisk ($q);
+}
+elsif ($q->param ('state') eq "USBUnMounttoDisk")
+{
+    USBUnMounttoDisk ($q);
+}
+elsif ($q->param ('state') eq "disable_entry")
+{
+    disable_entry ($q);
+}
+elsif ($q->param ('state') eq "enable_entry")
+{
+    enable_entry ($q);
+}
+elsif ($q->param ('state') eq "disable_mediaentry")
+{
+    disable_mediaentry ($q);
+}
+elsif ($q->param ('state') eq "enable_mediaentry")
+{
+    enable_mediaentry ($q);
+}
+elsif ($q->param ('state') eq "delete_entry")
+{
+    delete_entry ($q);
+}
+elsif ($q->param ('state') eq "UUIDgenerate")
+{
+    UUIDgenerate ($q);
+}
+elsif ($q->param ('state') eq "aide")
+{
+    aide ($q);
+}
+else
+{
+    esmith::cgi::genStateError ($q, \%conf);
+}
+
+exit (0);
+
+#------------------------------------------------------------
+# subroutine to display initial form
+#------------------------------------------------------------
+
+sub showInitial ($$)
+{
+
+    my ($q, $msg) = @_;
+    #------------------------------------------------------------
+    # db init
+    #------------------------------------------------------------
+    if (not defined db_get(\%conf, "usbdisks")) {
+            my %default_db=(
+                    'status' => 'disabled',
+                    'Debug' => 'no',
+            );
+            db_set(\%conf, "usbdisks","service",\%default_db);
+    }
+    
+    #------------------------------------------------------------
+    # If there's a message, we just finished an operation so show the
+    # status report. If no message, this is a new list of domains.
+    #------------------------------------------------------------
+
+    if ($msg eq '') {
+                esmith::cgi::genHeaderNonCacheable
+                ($q, \%conf, 'USB Disks ');
+    } else {
+        esmith::cgi::genHeaderNonCacheable
+            ($q, \%conf, 'Operation status report');
+
+        print $q->p ($msg);
+        print $q->hr;
+    }
+
+    print $q->hr;
+    GeneralMenu ($q);
+    print $tr_description;
+    print $q->hr;
+    my %disques= subdevices();
+    print "<h1>".$tr_disks_online."</h1>";
+    print "<table border='1' cellpadding='3'cellspacing='3' >\n";
+    print "<tr><td>$tr_dev</td><td>$tr_mount</td><td>$tr_fstab</td><td>$tr_uuid</td><td>$tr_label</td><td>$tr_fs_type</td><td>$tr_device_type</td><td>$tr_action</td></tr>\n";
+    my $clef;
+    my $disque;
+
+    for $clef ( sort keys %disques )
+      {
+       print "<tr>\n";
+           print "<td><font color=blue>$disques{$clef}{dev} </font></td>";
+           print "<td><font color=black>";
+           if ($disques{$clef}{mounted} eq "no") {print $tr_no;}
+           else {print $disques{$clef}{mounted}; }
+           print "</font></td>";
+           print "<td><font color=black>";
+           if ($disques{$clef}{fstab} eq "yes") {print $tr_yes;}
+           elsif ($disques{$clef}{fstab} eq "no") {print $tr_no;}
+           else  {print $disques{$clef}{fstab};}
+           print "</font></td>";
+           print "<td><font color=red>$disques{$clef}{UUID}</font></td>";
+           print "<td><font color=green>$disques{$clef}{LABEL}</font></td>";
+           print "<td><font color=grey>$disques{$clef}{FSTYPE}</font></td>";
+           print "<td><font color=grey>$disques{$clef}{DEVTYPE}</font></td>";
+           if (  ( "$disques{$clef}{DEVTYPE}" eq "USB" ) ||("$disques{$clef}{DEVTYPE}" eq "FireWire"  )  )
+           {
+           my %disque = %{$disques{$clef}};
+           my $options= OptionMenu(\%disque);
+           print "<td><font color=black>$options</font></td>";
+           }
+           else
+           {
+           print "<td><font color=black>&nbsp;</font></td>";
+           }
+
+      print "</tr>\n";
+      }
+    print "</table>\n";
+
+    print $q->hr;
+
+    my $OUT= knowndevices();
+    print $OUT;
+
+    esmith::cgi::genFooter ($q);
+}
+
+
+##
+#
+#      sub fstab
+#
+##
+sub showfstab ($)
+{
+    my @sensorOutput   = `cat /etc/fstab`;
+
+    my ($q) = @_;
+
+ #   esmith::cgi ($q, \%conf, 'Sensor Information');   
+
+    print $q->hr;    
+    print $q->p ($q->pre ("@sensorOutput")); 
+#    esmith::cgi::genFooter ($q);
+}
+
+##
+#
+#      sub liste des devices
+#      return hashe with data to create the html table
+##
+sub subdevices ($)
+{
+    my %mounted=`mount`;
+    my $mounted=`mount`;
+    my %fstab= `cat /etc/fstab`;
+    my @blkid= `/sbin/blkid -c /dev/null `;
+    my %disques;
+    my $i = 0;
+    #my %hashes = (clef =>"valeur", clef2 => "valeur2", [%tablo], %table);
+    #verif usb
+    #udevinfo -a -p /sys/block/sda
+    for (@blkid)
+	{
+          # chemin dev
+          $disques{$i}{dev}=  $_ =~ /^(\/dev\/[a-z\-]{2,3}[0-9]{1}):/ ? $1 : "$tr_unknown";
+          my $device = $disques{$i}{dev};
+          # nom disque sda  (not partition but hard drive)
+          $disques{$i}{name}=  $_ =~ /^\/dev\/([a-z\-]{2,3})[0-9]{1}:/ ? $1 : "$tr_unknown";
+          # UUID
+          $disques{$i}{UUID}=  $_ =~ /UUID="([0-9a-zA-Z\-]*)"/  ? $1 : "$tr_unknown";
+          # label for partition
+          $disques{$i}{LABEL}=  $_ =~ /LABEL="([a-zA-Z0-9_\-]*)"/ ? $1 : "$tr_unknown";
+          # mouted or not
+          $disques{$i}{mounted}=  $mounted =~ /$device on (\/media\/[a-zA-Z0-9_]+) / ? $1 : "no" ;
+          # is it in fstab
+          $disques{$i}{fstab}=  map ( /$device/, %fstab)? "yes" : "no";
+          my $UUID= $disques{$i}{UUID};
+          my $label= $disques{$i}{LABEL};
+          if ( ($disques{$i}{fstab} eq "no") && (! $UUID eq "") )
+          {$disques{$i}{fstab}=  map ( /$UUID/, %fstab)? "yes" : "no";}
+          if ( ($disques{$i}{fstab} eq "no") && (! $label eq "") )
+          {$disques{$i}{fstab}=  map ( /$label/, %fstab)? "yes" : "no";}
+          # file system type ext2 ext3 swap vfat ...
+	  if ( $_ =~ / SEC_TYPE="([a-zA-Z0-9_\-]*)"/ )
+	    {$disques{$i}{FSTYPE}=  $_ =~ / SEC_TYPE="([a-zA-Z0-9_\-]*)"/ ? $1 : "$tr_unknown";}
+	  else
+            {$disques{$i}{FSTYPE}=  $_ =~ / TYPE="([a-zA-Z0-9_\-]*)"/ ? $1 : "$tr_unknown";}
+          # device type : usb ide sata/scsi
+          $disques{$i}{DEVTYPE}=  "$tr_unknown";
+          my $name =  $disques{$i}{name};
+	  # my $udevinfo    = `/usr/bin/udevinfo -a -p /sys/block/$name`   ;
+          # small change in udevinfo between rhel 4 and 5
+	  my $udevinfo    = `/usr/bin/udevinfo -p /sys/block/$name -q env|grep "ID_BUS="|sed -e 's/^ID_//g'`   ;
+	  if ($udevinfo =~ /BUS=ide/)
+	     {
+             $disques{$i}{DEVTYPE}= "IDE";
+             }
+           elsif ($udevinfo =~ /BUS=usb/)
+             {
+             $disques{$i}{DEVTYPE}= "USB";
+             }
+           elsif ($udevinfo =~ /\/fw-host[0-9]+\//)
+             {
+             $disques{$i}{DEVTYPE}= "FireWire";
+             }	  
+	   elsif ($udevinfo =~ /BUS=scsi/)
+	     {
+             $disques{$i}{DEVTYPE}= "SCSI_SATA";
+             }
+          elsif ($udevinfo =~ /couldn\'t get the class device/)
+	     {
+             $disques{$i}{DEVTYPE}= "$tr_unknown";
+             }
+           else
+             {
+		my $infobis=`cat /proc/mdstat |grep -o md[0-9]*`;
+	     	if ($infobis =~ /$name/)
+		{
+		$disques{$i}{DEVTYPE}= "RAID";
+		}
+		else
+		{
+		$disques{$i}{DEVTYPE}= $udevinfo;
+		}
+	     }
+          $i++;
+        }
+    return %disques;
+}
+
+##
+#
+#      sub liste des devices
+#      return hashe with data to create the html table
+##
+sub OptionMenu ($)
+{
+  my(%disque) = %{$_[0]};
+  my $option;
+  
+  #if ($disque{UUID} eq $tr_unknown )
+#    {
+#    $option .= " <a href=usbdisks?state=UUIDgenerate&dev=$disque{dev}>$tr_uuidgenerate</a> ";
+#    }
+#  else
+#    {
+    if (  !db_get_type(\%usbdisks,  $disque{UUID})  )
+	{
+	$option .= " <a href=usbdisks?state=USBAddDisk&UUID=$disque{UUID}>$tr_add</a> ";
+	}
+    if ($disque{fstab} eq "yes")
+	{
+	if ($disque{mounted} eq "no")
+	    {$option .="  <a href=usbdisks?state=USBMountDisk&UUID=$disque{UUID}>Mount</a> " }
+	else
+	    {$option .="  <a href=usbdisks?state=USBUnMountDisk&UUID=$disque{UUID}>Umount</a> " }
+	}
+#    }    
+  return $option ;
+}
+
+##
+#
+#      sub liste des devices
+#      return hashe with data to create the html table
+##
+sub GeneralMenu ($)
+{
+   my ($q) = @_;
+    print $q->table ({border => 1, cellspacing => 1, cellpadding => 4});
+    print $q->Tr (
+                  esmith::cgi::genSmallCell ($q, "<a href='usbdisks'>$tr_menu_accueil</a>"),    
+		  esmith::cgi::genSmallCell ($q, "<a href='usbdisks?state=USBModifyConfig'>$tr_menu_config</a>"),
+                  esmith::cgi::genSmallCell ($q, "<b>[</b><a href='usbdisks?state=aide'>$tr_aide</a><b>]</b>")
+		  );
+
+    print '</table><br>';
+
+  return ;
+}
+
+##
+#
+#      sub liste des devices
+#      return hashe with data to create the html table
+##
+sub USBModifyConfig ($$)
+{
+   my ($q, $msg) = @_;
+
+    esmith::cgi::genHeaderNonCacheable ($q, \%conf, 'USBDisks : '.$tr_titre_config.'<br><br>');
+    GeneralMenu ($q);
+
+    print $q->startform (-method => 'POST',
+                         -action => $q->url (-absolute => 1));
+    print $q->table ({border => 1, cellspacing => 1, cellpadding => 4});
+    print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_frequence :"),
+                  esmith::cgi::genSmallCell ($q, "<input type=\"text\" name=\"usbd_frequence\" value=\"".$usbd_frequence."\">"));
+    print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_status :"),
+                  esmith::cgi::genSmallCell ($q, "<SELECT name=\"usbd_status\"><option value =\"$usbd_status\">$usbd_status</option><option value =\"disabled\">disabled</option><option value =\"enabled\">enabled</option</SELECT>"));
+    print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_status_mediaG :"),
+                  esmith::cgi::genSmallCell ($q, "<SELECT name=\"usbd_status_mediaG\"><option value =\"$usbd_status_mediaG\">$usbd_status_mediaG</option><option value =\"disabled\">disabled</option><option value =\"enabled\">enabled</option</SELECT>"));
+    print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_status_mediaU :"),
+                  esmith::cgi::genSmallCell ($q, "<SELECT name=\"usbd_status_mediaU\"><option value =\"$usbd_status_mediaU\">$usbd_status_mediaU</option><option value =\"disabled\">disabled</option><option value =\"enabled\">enabled</option</SELECT>"));
+    print '</table><br>';
+    print $q->hidden (-name => 'state', -override => 1, -default => 'validUSBModifyConfig');
+    print $q->table ({border => 0, cellspacing => 0, cellpadding => 4},
+    esmith::cgi::genTextRow ($q,
+           $q->b ("$tr_save_label")),
+
+    esmith::cgi::genButtonRow ($q,
+                               $q->submit (-name => 'action', -value => "$tr_save_button")));
+    print $q->endform;
+
+    esmith::cgi::genFooter ($q);
+
+    return;
+
+}
+
+sub validUSBModifyConfig ($$)
+{
+    my ($q) = @_;
+
+    my $pud_frequence = $q->param ('usbd_frequence') || "";
+    my $pud_status = $q->param ('usbd_status') || "disabled";
+    my $pud_status_mediaG = $q->param ('usbd_status_mediaG') || "disabled";
+    my $pud_status_mediaU = $q->param ('usbd_status_mediaU') || "disabled";
+    
+    if ($pud_status eq "enabled") {db_set_prop(\%conf,  "usbdisks" , "status", "enabled");} else{db_set_prop(\%conf,  "usbdisks" , "status", "disabled");};
+    if ($pud_status_mediaG eq "enabled") {db_set_prop(\%conf,  "usbdisks" , "status_mediaG", "enabled");} else{db_set_prop(\%conf,  "usbdisks" , "status_mediaG", "disabled");};
+    if ($pud_status_mediaU eq "enabled") {db_set_prop(\%conf,  "usbdisks" , "status_mediaU", "enabled");} else{db_set_prop(\%conf,  "usbdisks" , "status_mediaU", "disabled");};
+
+    if (($pud_frequence =~ /[0-9]{1,2}/) && ( $pud_frequence<=60 )) # au cas ou pb syntaxe
+    # ajout dans la base avec les variables qui s'affiche à l'ecran (avec les / en fin et début du chemin)
+    {
+    my $success= db_set_prop(\%conf,  "usbdisks" , "frequence", $pud_frequence);
+    my $errorexec1 = system ("/sbin/e-smith/expand-template", "/etc/crontab");
+    my $errorexec2 = system ("/sbin/service","crond","restart");
+
+    showInitial ($q, "$tr_rapport : $tr_titre_config <b>$tr_success ($errorexec1,$errorexec2)</b>");
+
+    }
+    else
+    {
+    showInitial ($q, "$tr_rapport : $tr_titre_config <b>$tr_failure :$pud_frequence $tr_incorect </b>");
+
+    }
+    return;
+}
+
+sub USBModifyDisk($$)
+{
+   my ($q, $msg) = @_;
+   my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+   if ((db_get_prop(\%usbdisks,  $UUID , "status") eq "enabled") ||(db_get_prop(\%usbdisks,  $UUID , "status") eq "disabled"))
+        {
+        my $temp_status =db_get_prop(\%usbdisks,  $UUID , "status");
+	my $temp_status_media = $_=db_get_prop(\%usbdisks,  $UUID , "status_media") ? db_get_prop(\%usbdisks,  $UUID , "status_media") : "disabled";
+        my $temp_mountto=db_get_prop(\%usbdisks,  $UUID , "mountto");
+        my $temp_options_mountto=  $_=db_get_prop(\%usbdisks,  $UUID , "options") ? db_get_prop(\%usbdisks,  $UUID , "options") : "pamconsole,exec,noauto,managed";	
+	
+	esmith::cgi::genHeaderNonCacheable ($q, \%conf, $tr_titre_modifier.' '.$UUID.'<br><br>');
+        GeneralMenu ($q);
+        print $q->hr;    
+        print $q->startform (-method => 'POST',
+                             -action => $q->url (-absolute => 1));
+        print $q->table ({border => 1, cellspacing => 1, cellpadding => 4});
+        print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_uuid :"),
+                      esmith::cgi::genSmallCell ($q, "<input type=\"text\" size=\"45\" name=\"usbd_UUID\" value=\"".$UUID."\" readonly>"));
+        #print $q->Tr (esmith::cgi::genSmallCell ($q, "add to fstab with UUID (noauto)"),
+        #              esmith::cgi::genSmallCell ($q, "<input type=\"text\" size=\"45\" name=\"usbd_fstab\">"));
+        print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_mount_to :"),
+                      esmith::cgi::genSmallCell ($q, "<input type=\"text\" size=\"45\" name=\"usbd_mountto\" value=\"$temp_mountto\">(".$temp_mountto.")"));
+        print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_options_mount_to :"),
+                      esmith::cgi::genSmallCell ($q, "<input type=\"text\" size=\"45\" name=\"usbd_options_mountto\" value=\"$temp_options_mountto\">(".$temp_options_mountto.")
+		      <br>defaults / pamconsole,exec,noauto,managed"));		      
+        print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_status :"),
+                      esmith::cgi::genSmallCell ($q, "<SELECT name=\"usbd_status\"><option value =\"$temp_status\">$temp_status</option><option value =\"disabled\">disabled</option><option value =\"enabled\">enabled</option</SELECT>(".$temp_status.")"));
+        print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_status_media :"),
+                      esmith::cgi::genSmallCell ($q, "<SELECT name=\"usbd_status_media\"><option value =\"$temp_status_media\">$temp_status_media</option><option value =\"disabled\">disabled</option><option value =\"enabled\">enabled</option</SELECT>(".$temp_status_media.")"));
+        print '</table><br>';
+        print $q->hidden (-name => 'state', -override => 1, -default => 'validUSBModifyDisk');
+        print $q->table ({border => 0, cellspacing => 0, cellpadding => 4},
+        esmith::cgi::genTextRow ($q,
+               $q->b ("$tr_save_label")),
+    
+        esmith::cgi::genButtonRow ($q,
+                                   $q->submit (-name => 'action', -value => "$tr_save_button")));
+    
+        print $q->endform;
+        esmith::cgi::genFooter ($q);
+        }
+    else
+        {
+        showInitial ($q, "$tr_rapport : $tr_failure </b>/");
+        }
+}
+
+sub validUSBModifyDisk($)
+{
+    my ($q) = @_;
+
+    my $pud_UUID = $q->param ('usbd_UUID') || "";
+    my $blkid= `/sbin/blkid -t UUID=$pud_UUID`;
+    my $name=  $blkid =~ /^\/dev\/([a-z\-]{2,3})[0-9]{1}:/ ? $1 : "$tr_unknown";
+    my $type;
+          my $udevinfo    = `/usr/bin/udevinfo -a -p /sys/block/$name`   ;
+	  if ($udevinfo =~ /BUS="ide"/)
+	     {
+             $type= "IDE";
+             }
+           elsif ($udevinfo =~ /\/usb[0-9]+\//)
+             {
+             $type= "USB";
+             }
+	  elsif ($udevinfo =~ /\/fw-host[0-9]+\//)
+             {
+             $type= "FireWire";
+             }	       
+	  elsif ($udevinfo =~ /BUS="scsi"/)
+	     {
+             $type= "SCSI_SATA";
+             }
+           else
+             {
+	     $type= "none";
+	     }
+
+    #my $pud_fstab = $q->param ('usbd_fstab') || "";
+    my $pud_mountto = $q->param ('usbd_mountto') || "";
+    my $pud_status = $q->param ('usbd_status') || "disabled";
+    # ajout 0.2-0.1
+     my $pud_status_media = $q->param ('usbd_status_media') || "disabled";
+     my $pud_options_mountto = $q->param ('usbd_options_mountto') || "";
+  
+     
+     #status
+    if ($pud_status eq "enabled") {db_set_prop(\%usbdisks,  $pud_UUID , "status", "enabled");} else{db_set_prop(\%usbdisks,  $pud_UUID , "status", "disabled");};
+    if ($pud_status_media eq "enabled") {db_set_prop(\%usbdisks,  $pud_UUID , "status_media", "enabled");} else{db_set_prop(\%usbdisks,  $pud_UUID , "status_media", "disabled");};
+    
+    #options
+    if ($pud_options_mountto eq "") {db_set_prop(\%usbdisks,  $pud_UUID , "options", "pamconsole,exec,noauto,managed");} else{db_set_prop(\%usbdisks,  $pud_UUID , "options",$pud_options_mountto );};
+    
+    
+    $pud_mountto =~ s/\\/\//g; # au cas ou un windowzien viens à taper le chemin de la ressource partagée à la mode Win$
+    # mounto dossier
+    if (-e $pud_mountto) {
+
+        if ( ($pud_mountto =~ /^\/dev\//)||($pud_mountto =~ /^\/proc\//)||($pud_mountto =~ /^\/sys\//)||($pud_mountto =~ /^\/root\//)
+          ||($pud_mountto =~ /^\/etc\//)||($pud_mountto =~ /^\/bin\//)||($pud_mountto =~ /^\/sbin\//)||($pud_mountto =~ /^\/lib\//)
+          ||($pud_mountto =~ /^\/usr\//)||($pud_mountto =~ /^\/var\//)||($pud_mountto =~ /^\/boot\//)||($pud_mountto =~ /^\/srv\//)
+          ||($pud_mountto =~ /^\/service\//)||($pud_mountto =~ /^\/command\//)||($pud_mountto =~ /^\/initrd\//)||($pud_mountto =~ /^\/mnt\//)
+          ||($pud_mountto =~ /^\/package\//)||($pud_mountto =~ /^\/selinux\//) ) {
+           showInitial ($q,"$tr_failure : $tr_forbidden_directory : $pud_mountto");
+           return;
+          }
+        else {
+          db_set_prop(\%usbdisks,  $pud_UUID , "mountto", $pud_mountto);
+          showInitial ($q, "<b><font size='+1'>$name $tr_rapport $tr_success</font></b><br> $pud_UUID<BR>
+      			$tr_status: <B>$pud_status</B><BR><BR>");
+          }
+
+      	}
+    else {
+
+        showInitial ($q, "<b><font size='+1'>$tr_rapport $tr_failure</font></b><br>$tr_directory_does_not_exist<BR>
+    			<B>$pud_UUID: $pud_mountto</B><BR><BR>");
+	  }
+
+    return;
+}
+
+
+sub USBAddDisk($$)
+{
+   my ($q, $msg) = @_;
+   my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+    esmith::cgi::genHeaderNonCacheable ($q, \%conf, 'Modify/add '.$UUID.'<br><br>');
+    GeneralMenu ($q);
+    print $q->hr;    
+    print $q->startform (-method => 'POST',
+                         -action => $q->url (-absolute => 1));
+    print $q->table ({border => 1, cellspacing => 1, cellpadding => 4});
+    print $q->Tr (esmith::cgi::genSmallCell ($q, "UUID"),
+                  esmith::cgi::genSmallCell ($q, "<input type=\"text\" size=\"45\" name=\"usbd_UUID\" value=\"".$UUID."\" readonly>"));
+    #print $q->Tr (esmith::cgi::genSmallCell ($q, "add to fstab with UUID (noauto)"),
+    #              esmith::cgi::genSmallCell ($q, "<input type=\"text\" size=\"45\" name=\"usbd_fstab\">"));
+    print $q->Tr (esmith::cgi::genSmallCell ($q, "mount to"),
+                  esmith::cgi::genSmallCell ($q, "<input type=\"text\" size=\"45\" name=\"usbd_mountto\">"));
+    print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_options_mount_to :"),
+                      esmith::cgi::genSmallCell ($q, "<input type=\"text\" size=\"45\" name=\"usbd_options_mountto\" value=\"pamconsole,exec,noauto,managed\">
+		      <br>defaults / pamconsole,exec,noauto,managed"));		      
+    print $q->Tr (esmith::cgi::genSmallCell ($q, "Status"),
+                  esmith::cgi::genSmallCell ($q, "<SELECT name=\"usbd_status\"><option value =\"disabled\">disabled</option><option value =\"enabled\">enabled</option</SELECT>"));
+    print $q->Tr (esmith::cgi::genSmallCell ($q, "$tr_status_media :"),
+                      esmith::cgi::genSmallCell ($q, "<SELECT name=\"usbd_status_media\"><option value =\"disabled\">disabled</option><option value =\"enabled\">enabled</option</SELECT>"));
+    print '</table><br>';
+    print $q->hidden (-name => 'state', -override => 1, -default => 'validUSBAddDisk');
+    print $q->table ({border => 0, cellspacing => 0, cellpadding => 4},
+    esmith::cgi::genTextRow ($q,
+           $q->b ("sauver changements")),
+
+    esmith::cgi::genButtonRow ($q,
+                               $q->submit (-name => 'action', -value => "sauvervariable")));
+
+    print $q->endform;
+    esmith::cgi::genFooter ($q);
+}
+
+sub validUSBAddDisk($)
+{
+    my ($q) = @_;
+
+    my $pud_UUID = $q->param ('usbd_UUID') || "";
+    my $blkid= `/sbin/blkid -t UUID=$pud_UUID`;
+    my $name=  $blkid =~ /^\/dev\/([a-z\-]{2,3})[0-9]{1}:/ ? $1 : "unknown";
+    my $type;
+          my $udevinfo    = `/usr/bin/udevinfo -a -p /sys/block/$name`   ;
+	  if ($udevinfo =~ /BUS="ide"/)
+	     {
+             $type= "IDE";
+             }
+           elsif ($udevinfo =~ /\/usb[0-9]+\//)
+             {
+             $type= "USB";
+             }
+	  elsif ($udevinfo =~ /\/fw-host[0-9]+\//)
+             {
+             $type= "FireWire";
+             }	  
+	  elsif ($udevinfo =~ /BUS="scsi"/)
+	     {
+             $type= "SCSI_SATA";
+             }
+           else
+             {
+	     $type= "none";
+	     }
+
+    #my $pud_fstab = $q->param ('usbd_fstab') || "";
+    my $pud_mountto = $q->param ('usbd_mountto') || "";
+    my $pud_status = $q->param ('usbd_status') || "disabled";
+    #ajout disque
+    my $resultat= db_set(\%usbdisks,  $pud_UUID ,$type);
+    
+    my $pud_status_media = $q->param ('usbd_status_media') || "disabled";
+    my $pud_options_mountto = $q->param ('usbd_options_mountto') || "";
+    
+    #status
+    if ($pud_status eq "enabled") {db_set_prop(\%usbdisks,  $pud_UUID , "status", "enabled");} else{db_set_prop(\%usbdisks,  $pud_UUID , "status", "disabled");};
+    if ($pud_status_media eq "enabled") {db_set_prop(\%usbdisks,  $pud_UUID , "status_media", "enabled");} else{db_set_prop(\%usbdisks,  $pud_UUID , "status_media", "disabled");};
+    
+    #options
+    if ($pud_options_mountto eq "") {db_set_prop(\%usbdisks,  $pud_UUID , "options", "pamconsole,exec,noauto,managed");} else{db_set_prop(\%usbdisks,  $pud_UUID , "options",$pud_options_mountto );};
+    #mount to
+    $pud_mountto =~ s/\\/\//g; # au cas ou un windowzien viens à taper le chemin de la ressource partagée à la mode Win$
+    if (-e $pud_mountto) {
+
+        if ( ($pud_mountto =~ /^\/dev\//)||($pud_mountto =~ /^\/proc\//)||($pud_mountto =~ /^\/sys\//)||($pud_mountto =~ /^\/root\//)
+        ||($pud_mountto =~ /^\/etc\//)||($pud_mountto =~ /^\/bin\//)||($pud_mountto =~ /^\/sbin\//)||($pud_mountto =~ /^\/lib\//)
+        ||($pud_mountto =~ /^\/usr\//)||($pud_mountto =~ /^\/var\//)||($pud_mountto =~ /^\/boot\//)||($pud_mountto =~ /^\/srv\//)
+        ||($pud_mountto =~ /^\/service\//)||($pud_mountto =~ /^\/command\//)||($pud_mountto =~ /^\/initrd\//)||($pud_mountto =~ /^\/mnt\//)
+        ||($pud_mountto =~ /^\/package\//)||($pud_mountto =~ /^\/selinux\//) ) {
+         showInitial ($q,"forbidden directory : $pud_mountto");
+         return;
+        }
+        else {
+        db_set_prop(\%usbdisks,  $pud_UUID , "mountto", $pud_mountto);
+        showInitial ($q, "<b><font size='+1'>$name Rapport $resultat</font></b><br> disk $pud_UUID<BR>
+    			status: <B>$pud_status</B><BR>$blkid<BR>");
+        }
+
+      	}
+    else {
+
+        showInitial ($q, "<b><font size='+1'>Rapport $resultat</font></b><br>Directory does not exist<BR>
+    			disk : <B>$pud_UUID</B><BR><BR>");
+	  }
+
+    return;
+}
+
+sub USBMountDisk($)
+{
+   my ($q) = @_;
+   my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+    my $blkid= `/sbin/blkid -t UUID=$UUID`;
+    my $dev=  $blkid =~ /^(\/dev\/[a-z\-]{2,3}[0-9]{1}):/ ? $1 : "unknown";
+    # essaie de montage par UUID ne semble pas correcte pour vfat
+    #my $mount=`/bin/mount -U $UUID`;
+    my $mount=`/bin/mount $dev  `;
+    my $mounted= `/bin/mount`=~ /$dev/ ? "$tr_success" : "$tr_failure";
+    print " $dev :mount  $mounted <br>";
+    showInitial ($q, "<b><font size='+1'>$tr_rapport mount :</font></b><br>$mounted<BR>
+			<B>$dev</B>: $mount<BR><BR>");
+}
+
+sub USBUnMountDisk($)
+{
+   my ($q) = @_;
+   my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+    my $blkid= `/sbin/blkid -t UUID=$UUID`;
+    my $dev=  $blkid =~ /^(\/dev\/[a-z\-]{2,3}[0-9]{1}):/ ? $1 : "unknown";
+    my $mounted=`mount`;
+    #destination
+    my $dest= $mounted =~ /$dev on (\/media\/[a-zA-Z0-9_]+) / ? $1 : "unknown" ;
+    my $mount=`/bin/umount -f $dest`;
+    my $mounted= `/bin/mount`=~ /$dev on (\/media\/[a-zA-Z0-9_]+)/ ? "$tr_failure" : "$tr_success";
+    showInitial ($q, "<b><font size='+1'>$tr_rapport umount :</font></b><br>$mounted<BR>
+			<B>$dev : $dest</B>: $mount<BR><BR>");
+}
+
+sub knowndevices ()
+{
+    my $i = 0;
+
+    my  $OUT= "<h1>".$tr_known_mounts."</h1>";
+    $OUT .= "<table border='1' cellpadding='3' cellspacing='3'>\n";
+    $OUT .= "<tr><td>$tr_uuid</td><td>$tr_device_type</td><td>$tr_status_mountto</td><td>$tr_status_mountmedia</td><td>$tr_mount_to</td><td>$tr_connected</td><td>$tr_mounted_to</td><td>$tr_action</td></tr>\n";
+    my $clef;
+    my $disque;
+
+    #while (($clef, $disque) = each(%disques))
+    #( sort { keys %{$HoH{$a}} <=> keys %{$HoH{$b}} } keys %HoH )
+    for $clef ( sort keys %usbdisks )
+      {
+           my $blkid= `/sbin/blkid -t UUID=$clef`;
+           my $dev=  $blkid =~ /^(\/dev\/[a-z\-]{2,3}[0-9]{1}):/ ? $1 : $tr_unknown;
+           my @mounted=`mount`;
+           my $dest = db_get_prop(\%usbdisks,  $clef, "mountto");
+       $OUT .=  "<tr>\n";
+           $OUT .=  "<td><font color=black>$clef</font></td>";
+           $OUT .=  "<td><font color=blue>".db_get_type(\%usbdisks,  $clef )."</font></td>";
+           # status auto mount_to
+	   $OUT .=  "<td> ";
+           if ( (db_get_type(\%usbdisks,  $clef ) eq "USB") || (db_get_type(\%usbdisks,  $clef ) eq "FireWire") )
+              {
+           if (db_get_prop(\%usbdisks,  $clef , "status")eq "enabled")
+                 {$OUT .="<a href=usbdisks?state=disable_entry&UUID=$clef>".db_get_prop(\%usbdisks,  $clef , "status")." </a>"; }
+           if (db_get_prop(\%usbdisks,  $clef , "status")eq "disabled")
+                 {$OUT .="<a href=usbdisks?state=enable_entry&UUID=$clef>".db_get_prop(\%usbdisks,  $clef , "status")."  </a>"; }
+              }
+           else {$OUT.= db_get_prop(\%usbdisks,  $clef , "status");};
+           $OUT.= "</td>";
+	   # status auto mount media
+           $OUT .=  "<td> ";
+           if ( (db_get_type(\%usbdisks,  $clef ) eq "USB") || (db_get_type(\%usbdisks,  $clef ) eq "FireWire") )
+              {
+           if (db_get_prop(\%usbdisks,  $clef , "status_media")eq "enabled")
+                 {$OUT .="<a href=usbdisks?state=disable_mediaentry&UUID=$clef>".db_get_prop(\%usbdisks,  $clef , "status_media")." </a>"; }
+           elsif (db_get_prop(\%usbdisks,  $clef , "status_media")eq "disabled")
+	         {$OUT .="<a href=usbdisks?state=enable_mediaentry&UUID=$clef>".db_get_prop(\%usbdisks,  $clef , "status_media")."  </a>"; }
+	   else
+	        {$OUT .="<a href=usbdisks?state=enable_mediaentry&UUID=$clef>not set</a>"; }    
+	      }
+           else {$OUT.= db_get_prop(\%usbdisks,  $clef , "status_media");};
+           $OUT.= "</td>";	    	   
+           #mount to
+           $OUT .=  "<td><font color=black>".db_get_prop(\%usbdisks,  $clef , "mountto")."</font></td>";
+           # connecté
+           $OUT .=  (! $blkid eq "")? "<td>$tr_yes</td>": "<td>$tr_no</td>" ;
+           #  monté
+           $OUT .=  ((! $blkid eq "")&&(map(/^$dev on $dest/,@mounted)))? "<td>$tr_yes</td>": "<td>$tr_no</td>" ;
+           #action
+           $OUT .=  "<td>";
+           if  ( ( db_get_type(\%usbdisks,  $clef ) eq "USB" ) || ( db_get_type(\%usbdisks,  $clef ) eq "FireWire" ) )
+           {
+           # ajout test connecté puis test monté sur le point de montage
+           if (! $blkid eq "")
+           {
+            if (map(/^$dev on $dest/,@mounted)) {$OUT .= " <a href=usbdisks?state=USBUnMounttoDisk&UUID=$clef>UnountTo</a> ";}
+            else
+            {$OUT .= " <a href=usbdisks?state=USBMounttoDisk&UUID=$clef>MountTo</a> ";}
+           }
+           $OUT .= " <a href=usbdisks?state=USBModifyDisk&UUID=$clef>$tr_modify</a> ";
+           }
+           $OUT .= " <a href=usbdisks?state=delete_entry&UUID=$clef>$tr_remove</a> </td>";
+
+      $OUT .= "</tr>\n";
+      }
+    $OUT .= "</table>\n";
+
+    return $OUT;
+}
+
+sub delete_entry ($)
+{
+   my ($q) = @_;
+   my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+   my $dest= db_get_prop(\%usbdisks,  $UUID, "mountto");
+   #demontage forcé
+   my $mount=`/bin/umount -fl $dest`;
+   my $resultat= db_delete(\%usbdisks,  $UUID) ? "$tr_success" : "$tr_failure";
+   showInitial ($q, "<b><font size='+1'>$tr_rapport: </font></b><br>$resultat<BR>
+			<B>$UUID</B>: $tr_removed<BR><BR>");
+
+}
+
+sub disable_entry ($)
+{
+   my ($q) = @_;
+   my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+   my $resultat= db_set_prop(\%usbdisks,  $UUID, "status", "disabled") ? "$tr_success" : "$tr_failure";
+  showInitial ($q, "<b><font size='+1'>$tr_rapport:</font></b><br> $resultat<BR>
+			<B>$UUID</B>: disabled<BR><BR>");
+
+}
+sub enable_entry ($)
+{
+   my ($q) = @_;
+   my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+   my $resultat= db_set_prop(\%usbdisks,  $UUID, "status", "enabled") ? "$tr_success" : "$tr_failure";
+  showInitial ($q, "<b><font size='+1'>$tr_rapport: </font></b><br>$resultat<BR>
+			<B>$UUID</B>: enabled<BR><BR>");
+
+}
+
+
+sub disable_mediaentry ($)
+{
+   my ($q) = @_;
+   my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+   my $resultat= db_set_prop(\%usbdisks,  $UUID, "status_media", "disabled") ? "$tr_success" : "$tr_failure";
+  showInitial ($q, "<b><font size='+1'>$tr_rapport:</font></b><br> $resultat<BR>
+			<B>$UUID</B>: disabled<BR><BR>");
+
+}
+sub enable_mediaentry ($)
+{
+   my ($q) = @_;
+   my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+   my $resultat= db_set_prop(\%usbdisks,  $UUID, "status_media", "enabled") ? "$tr_success" : "$tr_failure";
+  showInitial ($q, "<b><font size='+1'>$tr_rapport: </font></b><br>$resultat<BR>
+			<B>$UUID</B>: enabled<BR><BR>");
+
+}
+
+
+
+sub USBMounttoDisk($)
+{
+    my ($q) = @_;
+    my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+    my $blkid= `/sbin/blkid -t UUID=$UUID`;
+    my $dev=  $blkid =~ /^(\/dev\/[a-z\-]{2,3}[0-9]{1}):/ ? $1 : "$tr_unknown";
+    my $dest= db_get_prop(\%usbdisks,  $UUID, "mountto");
+    my $options= $_=db_get_prop(\%usbdisks,  $UUID, "options")? db_get_prop(\%usbdisks,  $UUID, "options")  : "pamconsole,exec,noauto,managed";
+    # mount par le UUID pas supporté pour vfat
+    #my $mount=`/bin/mount -U $UUID $dest -o pamconsole,exec,noauto,managed`;
+    my $mount=`/bin/mount $dev -t auto $dest -o $options`;
+    my $mounted= `/bin/mount`=~ /$dev/ ? "$tr_success" : "$tr_failure";
+    showInitial ($q, "<b><font size='+1'>$tr_rapport mount : </font></b><br>$mounted<BR>
+			<B>$dev</B>: $mount<BR><BR>");
+}
+
+
+sub USBUnMounttoDisk($)
+{
+   my ($q) = @_;
+   my $UUID = $q->param ('UUID') || return showInitial ($q,"");
+    my $blkid= `/sbin/blkid -t UUID=$UUID`;
+    my $dev=  $blkid =~ /^(\/dev\/[a-z\-]{2,3}[0-9]{1}):/ ? $1 : "unknown";
+    my $dest= db_get_prop(\%usbdisks,  $UUID, "mountto");
+    my $mount=`/bin/umount -f $dest`;
+    my $mounted= `/bin/mount`=~ /$dev/ ? "$tr_failure" : "$tr_success";
+    showInitial ($q, "<b><font size='+1'>$tr_rapport umount :</font></b><br>$mounted<BR>
+			<B>$dest</B>: $mount<BR><BR>");
+
+    #esmith::cgi::genFooter ($q);
+}
+
+
+sub aide ($) {
+    esmith::cgi::genHeaderNonCacheable ($q, \%conf, $tr_aide);
+    GeneralMenu ($q);
+    print $tr_pageaide;
+    esmith::cgi::genFooter ($q);
+return;
+}
+
+sub UUIDgenerate ($)
+{
+   my ($q) = @_;
+   my $dev = $q->param ('dev') || return showInitial ($q,"");
+   my $newuuid=`/usr/bin/uuidgen`;
+   my $resultat= `/sbin/tune2fs -U $newuuid $dev`;
+  # system ( '/bin/su root /sbin/tune2fs ',' -U ' , $newuuid , $dev ) ;
+       showInitial ($q, "<b><font size='+1'>$tr_rapport uuidgen / tune2fs :</font></b><br>$resultat<BR>
+			<B></B>: /sbin/tune2fs -U $newuuid $dev <BR><BR>");
+
+}
+
+__DATA__
+<form>
+</form>
